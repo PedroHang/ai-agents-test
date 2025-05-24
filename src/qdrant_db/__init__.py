@@ -1,1 +1,1 @@
-from . import embed
+from . import embed, retrieve
