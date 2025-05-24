@@ -2,6 +2,9 @@ from strands import Agent, tool
 from strands_tools import calculator, current_time, python_repl
 from strands.models import BedrockModel
 from ..tools import *
+from dotenv import load_dotenv
+
+load_dotenv()
 
 bedrock_model = BedrockModel(
     model_id="us.anthropic.claude-3-5-haiku-20241022-v1:0",
