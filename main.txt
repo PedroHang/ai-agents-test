@@ -1,0 +1,159 @@
+import fitz  # PyMuPDF para extrair texto do PDF
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import VectorParams, Distance
+from qdrant_client.http.exceptions import UnexpectedResponse
+import google.generativeai as genai
+from dotenv import load_dotenv
+import os
+import numpy as np
+import hashlib
+
+# Carrega API key do arquivo .env
+load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+
+# Configura API Gemini
+genai.configure(api_key=api_key)
+model = genai.GenerativeModel("gemini-1.5-flash")
+
+# Função para extrair texto do PDF
+def extract_text_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    texts = []
+    for page in doc:
+        texts.append(page.get_text())
+    return "\n".join(texts)
+
+# Função para quebrar texto em pedaços (chunks)
+def chunk_text(text, chunk_size=500, overlap=50):
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), chunk_size - overlap):
+        chunk = words[i:i+chunk_size]
+        chunks.append(" ".join(chunk))
+    return chunks
+
+# Função para gerar um ID único baseado no conteúdo do texto
+def generate_content_hash(text, pdf_name):
+    # Combinamos o nome do PDF com o texto para ter IDs únicos por arquivo
+    content = f"{pdf_name}:{text}"
+    return int(hashlib.md5(content.encode()).hexdigest(), 16) % (2**63)
+
+# Função para verificar se a coleção existe
+def collection_exists(client, collection_name):
+    try:
+        collections = client.get_collections()
+        return any(collection.name == collection_name for collection in collections.collections)
+    except Exception:
+        return False
+
+# Função para verificar se um documento já foi processado
+def document_already_processed(client, collection_name, pdf_path):
+    try:
+        # Verificamos se existe algum ponto com o nome do arquivo no payload
+        search_result = client.scroll(
+            collection_name=collection_name,
+            scroll_filter={"must": [{"key": "source", "match": {"value": pdf_path}}]},
+            limit=1
+        )
+        return len(search_result[0]) > 0
+    except Exception:
+        return False
+
+def main():
+    pdf_paths = ["Curriculo1.pdf", "Curriculo2.pdf"]  # lista com os PDFs que quer processar
+    collection_name = "pdf_collection"
+
+    # Conectar no Qdrant
+    print("Conectando no Qdrant...")
+    qdrant = QdrantClient(host="localhost", port=6333)
+    
+    # Verificar se a coleção existe, se não, criar
+    if not collection_exists(qdrant, collection_name):
+        print(f"Criando nova coleção '{collection_name}'...")
+        qdrant.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE)  # 384 é o tamanho do modelo all-MiniLM-L6-v2
+        )
+
+    # Inicializar o modelo de embeddings
+    embedder = SentenceTransformer('all-MiniLM-L6-v2')
+    
+    # Processar apenas PDFs que ainda não foram processados
+    for pdf_path in pdf_paths:
+        if not document_already_processed(qdrant, collection_name, pdf_path):
+            print(f"Processando novo documento: {pdf_path}")
+            
+            # Extrair e chunkar o texto
+            text = extract_text_from_pdf(pdf_path)
+            chunks = chunk_text(text)
+            print(f" - {len(chunks)} pedaços extraídos.")
+            
+            # Gerar embeddings
+            print(f"Gerando embeddings para {pdf_path}...")
+            embeddings = embedder.encode(chunks)
+            
+            # Preparar pontos para inserção
+            points = [
+                {
+                    "id": generate_content_hash(chunks[idx], pdf_path),
+                    "vector": embeddings[idx].tolist(),
+                    "payload": {
+                        "text": chunks[idx],
+                        "source": pdf_path,
+                        "chunk_index": idx
+                    }
+                }
+                for idx in range(len(chunks))
+            ]
+            
+            # Inserir vetores no Qdrant
+            print(f"Inserindo {len(points)} vetores no Qdrant...")
+            qdrant.upsert(collection_name=collection_name, points=points)
+            print(f"Documento {pdf_path} processado e inserido com sucesso!")
+        else:
+            print(f"Documento {pdf_path} já foi processado anteriormente. Pulando...")
+
+    # Consultar a quantidade total de vetores
+    collection_info = qdrant.get_collection(collection_name=collection_name)
+    print(f"Total de vetores na coleção: {collection_info.vectors_count}")
+
+    # Continuar igual: perguntar e buscar os trechos mais relevantes
+    pergunta = "Compare a formação acadêmica e certificações de ambos os candidatos. Quem possui credenciais mais relevantes para um projeto de migração para AWS?"
+    print(f"\nBuscando contexto para a pergunta: {pergunta}")
+    
+    query_vec = embedder.encode([pergunta])[0].tolist()
+    hits = qdrant.search(collection_name=collection_name, query_vector=query_vec, limit=3)
+
+    print("\nTrechos encontrados no Qdrant:")
+    for idx, hit in enumerate(hits):
+        # Verifica se existe a chave 'source' no payload, caso contrário usa 'Desconhecido'
+        source = hit.payload.get('source', 'Desconhecido')
+        print(f"{idx+1}. Fonte: {source}")
+        print(f"   {hit.payload['text'][:200]}...")
+
+    # Montar prompt e gerar resposta
+    contexto = "\n\n".join([
+        f"[De {hit.payload.get('source', 'Desconhecido')}]: {hit.payload['text']}" 
+        for hit in hits
+    ])
+    
+    prompt = f"""
+Considere o seguinte contexto extraído de documentos:
+
+{contexto}
+
+Com base nesse contexto, responda a pergunta:
+
+{pergunta}
+"""
+
+    print("\nGerando resposta com Gemini...")
+    response = model.generate_content(prompt)
+    print("\nResposta gerada pelo Gemini:")
+    print(response.text)
+
+
+if __name__ == "__main__":
+    main()
