@@ -1,7 +1,0 @@
-pip install python-dotenv google-generativeai qdrant-client PyMuPDF sentence-transformers numpy
-
-
-
-
-
-docker compose up -d
