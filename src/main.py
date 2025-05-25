@@ -32,11 +32,11 @@ if __name__ == "__main__":
     agent = Agent(
         tools=[calculator, retrieve.retrieve_relevant_texts],
         model=bedrock_model,
-        system_prompt="Você é um consultor de frases em livros."
+        system_prompt="Você é um consultor de informações em documentações de TI"
     )
 
 
     # Initialize the agent
-    answer = agent("Quero que consulte o livro cosmos e me diga o que acontece na parte que diz O desastre, qualquer que tenha sido, que retirou os dinossauros do mundo, removeu a pressão sobre os mamíferos.")
+    answer = agent("Sobre o que é o documento em questão?")
 
     print(answer)
