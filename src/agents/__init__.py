@@ -1,1 +1,1 @@
-from . import letter_counter_agent
+from . import plotly_agent, letter_counter_agent

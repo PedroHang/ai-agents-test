@@ -4,8 +4,8 @@ from .tools import *
 from .agents import *
 from .qdrant_db import *
 
-from strands import Agent, tool
-from strands_tools import calculator, current_time, python_repl
+from strands import Agent
+from strands_tools import calculator
 from strands.models import BedrockModel
 
 
@@ -30,13 +30,13 @@ if __name__ == "__main__":
     )
 
     agent = Agent(
-        tools=[calculator, retrieve.retrieve_relevant_texts],
+        tools=[calculator, retrieve.retrieve_relevant_texts, plotly_agent.generate_plot],
         model=bedrock_model,
-        system_prompt="Você é um consultor de informações em documentações de TI"
+        system_prompt="Você é um agente responsável por garantir a resposta correta para a pergunta do usuário. Para isso, fará uso de ferramentas e agentes disponíveis"
     )
 
 
     # Initialize the agent
-    answer = agent("Sobre o que é o documento em questão?")
+    answer = agent("Sobre o que é o documento em questão? em seguida gere um gráfico sobre o documento")
 
     print(answer)
